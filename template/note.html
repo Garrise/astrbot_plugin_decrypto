@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>表格还原</title>
+<style>
+    body {
+        font-family: "Microsoft YaHei", sans-serif;
+        padding: 20px;
+        background-color: #f0f0f0;
+    }
+
+    .container {
+        display: flex;
+        background-color: white;
+        border: 1px solid #999;
+        width: 100%;
+        max-width: 1200px; /* 限制最大宽度 */
+        margin: 0 auto;
+    }
+
+    /* 左右两侧的容器 */
+    .panel {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+    }
+
+    /* 中间的黑色分隔条 */
+    .gap {
+        width: 60px;
+        background-color: black;
+        flex-shrink: 0; /* 防止被压缩 */
+    }
+
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed; /* 固定列宽，均分 */
+    }
+
+    td, th {
+        border: 1px solid black;
+        padding: 6px 4px;
+        text-align: left; /* 默认左对齐，模拟原图 */
+        vertical-align: middle;
+        font-size: 14px;
+        height: 24px;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+    }
+
+    /* 顶部第一行 header 样式 */
+    .top-header td {
+        background-color: #fff;
+        border-bottom: 1px solid #ccc; /* 弱化一点下边框 */
+        font-weight: normal;
+    }
+
+    /* 主标题行 (湖怪/松茸) */
+    .main-title {
+        text-align: center;
+        font-size: 16px;
+        font-weight: normal;
+    }
+
+    /* 数字行 */
+    .number-row td {
+        text-align: center;
+        color: #333;
+    }
+
+    /* 特殊颜色 */
+    .red-text {
+        color: red;
+        font-weight: bold; /* 原图中红色字体似乎加粗了 */
+    }
+
+    /* 调整单元格文字对齐，使其更像原图 */
+    .grid-data td {
+        padding-left: 2px;
+        text-align: center;
+    }
+    
+</style>
+</head>
+<body>
+
+<div class="container">
+    <!-- 左侧区域 -->
+    <div class="panel">
+        <table>
+            <!-- 标题 -->
+            <tr>
+                <td colspan="4" class="main-title">黑队</td>
+            </tr>
+            <tr>
+                <td colspan="4">
+                    { % for player in black_teams% }
+                    {{ player[1] }} 
+                    { % endfor % }
+                </td>
+            </tr>
+            <!-- 数字 -->
+            <tr class="number-row">
+                <td>1</td>
+                <td>2</td>
+                <td>3</td>
+                <td>4</td>
+            </tr>
+            <!-- 数据行 -->
+            <tbody class="grid-data">
+                { % for cipher in black_history_ciphers % }
+                    <tr>
+                        <td>{{cipher[0]}}</td>
+                        <td>{{cipher[1]}}</td>
+                        <td>{{cipher[2]}}</td>
+                        <td>{{cipher[3]}}</td>
+                    </tr>
+                { % endfor% }
+            </tbody>
+        </table>
+    </div>
+
+    <!-- 中间黑色分隔 -->
+    <div class="gap"></div>
+
+    <!-- 右侧区域 -->
+    <div class="panel">
+        <table>
+            <!-- 标题 -->
+            <tr>
+                <td colspan="4" class="main-title">白队</td>
+            </tr>
+            <tr>
+                <td colspan="4">
+                    { % for player in white_teams % }
+                    {{ player[1] }} 
+                    { % endfor % }
+                </td>
+            </tr>
+            <!-- 数字 -->
+            <tr class="number-row">
+                <td>1</td>
+                <td>2</td>
+                <td>3</td>
+                <td>4</td>
+            </tr>
+            <!-- 数据行 -->
+            <tbody class="grid-data">
+                { % for cipher in white_history_ciphers % }
+                    <tr>
+                        <td>{{cipher[0]}}</td>
+                        <td>{{cipher[1]}}</td>
+                        <td>{{cipher[2]}}</td>
+                        <td>{{cipher[3]}}</td>
+                    </tr>
+                { % endfor% }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+</body>
+</html>
