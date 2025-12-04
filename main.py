@@ -2,8 +2,7 @@ from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult, Mess
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 from astrbot.api.all import AstrBotConfig, Image, Plain
-from astrbot.core.platform.message_session import MessageSesion
-from astrbot.core.platform.message_type import MessageType
+from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_platform_adapter import AiocqhttpMessageEvent
 
 import random, math
 from pathlib import Path
@@ -18,6 +17,8 @@ class DecryptoSession():
         self.white_teams = []
         self._generate_keyword()
 
+        self.black_cipher = []
+        self.white_cipher = []
         self.black_history_ciphers = []
         self.white_history_ciphers = []
 
@@ -87,10 +88,10 @@ class DecryptoSession():
         for i, cipher in zip(self.password, ciphers):
             cipher_record[int(i) - 1] = cipher
         if self.turn % 2 == 1:
-            self.black_history_ciphers.append(cipher_record)
+            self.black_cipher = cipher_record
             decrypt_side = "白"
         else:
-            self.white_history_ciphers.append(cipher_record)
+            self.white_cipher = cipher_record
             decrypt_side = "黑"
 
         self.phase = 1
@@ -116,6 +117,7 @@ class DecryptoSession():
     def turn_close(self):
         reply = f"回合结束！本回合密码为：{self.password}"
         if self.turn % 2 == 1: # 黑方加密
+            self.black_history_ciphers.append(self.black_cipher)
             if self.enemy_password == self.password: # 白方猜测正确，拦截指示物+1
                 self.white_intercepts += 1
                 reply += f"\n\n白方破解成功！"
@@ -123,6 +125,7 @@ class DecryptoSession():
                 self.black_errors += 1
                 reply += f"\n\n黑方译码失败！"
         else: # 白方加密
+            self.white_history_ciphers.append(self.white_cipher)
             if self.enemy_password == self.password: # 黑方猜测正确，拦截指示物+1
                 self.black_intercepts += 1
                 reply += f"\n\n黑方破解成功！"
@@ -149,19 +152,15 @@ class DecryptoSession():
         if self.black_intercepts == 2:
             self.is_game_set = True
             self.game_set_reply = "黑方已拦截成功两次，获得胜利！"
-            return True
         if self.white_intercepts == 2:
             self.is_game_set = True
             self.game_set_reply = "白方已拦截成功两次，获得胜利！"
-            return True
         if self.black_errors == 2:
             self.is_game_set = True
             self.game_set_reply = "黑方已译码失败两次，白方获得胜利！"
-            return True
         if self.white_errors == 2:
             self.is_game_set = True
             self.game_set_reply = "白方已译码失败两次，黑方获得胜利！"
-            return True
 
         # 游戏结束积分胜利
         if self.turn == self.max_turns:
@@ -175,8 +174,12 @@ class DecryptoSession():
                 self.game_set_reply += "\n\n白方获得胜利！"
             else:
                 self.game_set_reply += "\n\n双方达成平局！"
-            return True
-        return False
+        
+        if self.game_set:
+            self.game_set_reply += "\n\n黑方关键字：" + ", ".join(self.black_keywords)
+            self.game_set_reply += "\n\n白方关键字：" + ", ".join(self.white_keywords)
+        else:
+            return False
 
     def _generate_password(self):
         numbers = [1, 2, 3, 4]
@@ -298,7 +301,7 @@ class DecryptoPlugin(Star):
         event.stop_event()
     
     @decrypto.command("开始", alias={"start"})
-    async def start(self, event: AstrMessageEvent):
+    async def start(self, event: AiocqhttpMessageEvent):
         session_id = event.get_group_id()
         if session_id == "":
             return
@@ -312,6 +315,22 @@ class DecryptoPlugin(Star):
             return
         if len(session.black_teams) < 2 or len(session.white_teams) < 2:
             yield event.plain_result("每队至少需要2名成员才能开始游戏！")
+            event.stop_event()
+            return
+        #判断玩家是否都是好友
+        reply = "以下玩家不是机器人的好友，无法开始游戏："
+        not_friends = []
+        for member_id, member_name in session.black_teams + session.white_teams:
+            is_friend = False
+            friend_list = await event.bot.call_action("get_friend_list")
+            for friend in friend_list:
+                if member_id == str(friend.get("user_id")):
+                    is_friend = True
+                    break
+            if not is_friend:
+                not_friends.append(member_name)
+        if not_friends:
+            yield event.plain_result(reply + "\n" + "\n".join(f"- {name}" for name in not_friends))
             event.stop_event()
             return
                 
