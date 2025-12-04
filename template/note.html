@@ -98,9 +98,9 @@
             </tr>
             <tr>
                 <td colspan="4">
-                    { % for player in black_teams% }
+                    {% for player in black_teams%}
                     {{ player[1] }} 
-                    { % endfor % }
+                    {% endfor %}
                 </td>
             </tr>
             <!-- 数字 -->
@@ -112,14 +112,24 @@
             </tr>
             <!-- 数据行 -->
             <tbody class="grid-data">
-                { % for cipher in black_history_ciphers % }
+                {% for cipher in black_history_ciphers %}
                     <tr>
                         <td>{{cipher[0]}}</td>
                         <td>{{cipher[1]}}</td>
                         <td>{{cipher[2]}}</td>
                         <td>{{cipher[3]}}</td>
                     </tr>
-                { % endfor% }
+                {% else %}
+                    <tr>
+                        <td colspan="4">暂无数据</td>
+                    </tr>
+                {% endfor%}
+                <tr>
+                    <td>拦截成功</td>
+                    <td>{{ black_intercepts }}</td>
+                    <td>译码失败</td>
+                    <td>{{ black_errors }}</td>
+                </tr>
             </tbody>
         </table>
     </div>
@@ -136,9 +146,9 @@
             </tr>
             <tr>
                 <td colspan="4">
-                    { % for player in white_teams % }
+                    {% for player in white_teams %}
                     {{ player[1] }} 
-                    { % endfor % }
+                    {% endfor %}
                 </td>
             </tr>
             <!-- 数字 -->
@@ -150,14 +160,24 @@
             </tr>
             <!-- 数据行 -->
             <tbody class="grid-data">
-                { % for cipher in white_history_ciphers % }
+                {% for cipher in white_history_ciphers %}
                     <tr>
                         <td>{{cipher[0]}}</td>
                         <td>{{cipher[1]}}</td>
                         <td>{{cipher[2]}}</td>
                         <td>{{cipher[3]}}</td>
                     </tr>
-                { % endfor% }
+                {% else %}
+                    <tr>
+                        <td colspan="4">暂无数据</td>
+                    </tr>
+                {% endfor%}
+                    <tr>
+                        <td>拦截成功</td>
+                        <td>{{ white_intercepts }}</td>
+                        <td>译码失败</td>
+                        <td>{{ white_errors }}</td>
+                    </tr>
             </tbody>
         </table>
     </div>
