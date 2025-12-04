@@ -273,13 +273,20 @@ class DecryptoPlugin(Star):
                 yield event.plain_result(f"白队人数已满，无法加入！")
         elif team in random_cmd:
             if len(session.black_teams) < 4 and len(session.white_teams) < 4:
-                coin = random.randint(0, 1)
-                if coin:
+                if len(session.black_teams) < len(session.white_teams):
                     session.black_teams.append((event.get_sender_id(), event.get_sender_name()))
                     yield event.plain_result(f"{event.get_sender_name()}加入了黑队！")
-                else:
+                elif len(session.white_teams) < len(session.black_teams):
                     session.white_teams.append((event.get_sender_id(), event.get_sender_name()))
                     yield event.plain_result(f"{event.get_sender_name()}加入了白队！")
+                else:
+                    coin = random.randint(0, 1)
+                    if coin:
+                        session.black_teams.append((event.get_sender_id(), event.get_sender_name()))
+                        yield event.plain_result(f"{event.get_sender_name()}加入了黑队！")
+                    else:
+                        session.white_teams.append((event.get_sender_id(), event.get_sender_name()))
+                        yield event.plain_result(f"{event.get_sender_name()}加入了白队！")
             elif len(session.black_teams) < 4:
                 session.black_teams.append((event.get_sender_id(), event.get_sender_name()))
                 yield event.plain_result(f"{event.get_sender_name()}加入了黑队！")
@@ -409,6 +416,20 @@ class DecryptoPlugin(Star):
             tmpl_str = f.read()
         url = await self.html_render(tmpl_str, dictionary)
         yield event.image_result(url)
-        
+
+    @decrypto.command("终止", alias=["stop"])
+    async def stop(self, event: AstrMessageEvent):
+        session_id = event.get_group_id()
+        if session_id == "":
+            return
+        if session_id not in self.sessions:
+            yield event.plain_result("截码战尚未开始！")
+            event.stop_event()
+            return
+        session: DecryptoSession = self.sessions[session_id]
+        del self.sessions[session_id]
+        yield event.plain_result("截码战已终止。")
+        event.stop_event()
+
     async def terminate(self):
         """可选择实现异步的插件销毁方法，当插件被卸载/停用时会调用。"""
