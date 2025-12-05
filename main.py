@@ -93,9 +93,16 @@ class DecryptoSession():
         else:
             self.white_cipher = cipher_record
             decrypt_side = "黑"
-
-        self.phase = 1
-        return f"加密完成！\n请{decrypt_side}队输入指令进行破解：\n/截码 解密 [密码]\n/dc decrypt [password]"
+        if self.turn / 2 < 1: # 第一回合不提示密码
+            self.phase = 2
+            if decrypt_side == "黑":
+                decrypt_side = "白"
+            else: 
+                decrypt_side = "黑"
+            return f"加密完成！首回合无拦截阶段\n请{decrypt_side}队输入指令进行破解：\n/截码 解密 [密码]\n/dc decrypt [password]"
+        else:
+            self.phase = 1
+            return f"加密完成！\n请{decrypt_side}队输入指令进行破解：\n/截码 解密 [密码]\n/dc decrypt [password]"
 
     def decrypt(self, password: str) -> str | None:
         if self.phase == 1: # 敌方解密阶段
@@ -143,7 +150,10 @@ class DecryptoSession():
             "black_intercepts": self.black_intercepts,
             "white_intercepts": self.white_intercepts,
             "black_errors": self.black_errors,
-            "white_errors": self.white_errors
+            "white_errors": self.white_errors,
+            "is_game_set": self.is_game_set,
+            "black_keywords": self.black_keywords,
+            "white_keywords": self.white_keywords
             }
         return dictionary
 
@@ -175,11 +185,9 @@ class DecryptoSession():
             else:
                 self.game_set_reply += "\n\n双方达成平局！"
         
-        if self.game_set:
+        if self.is_game_set:
             self.game_set_reply += "\n\n黑方关键字：" + ", ".join(self.black_keywords)
             self.game_set_reply += "\n\n白方关键字：" + ", ".join(self.white_keywords)
-        else:
-            return False
 
     def _generate_password(self):
         numbers = [1, 2, 3, 4]
@@ -403,17 +411,21 @@ class DecryptoPlugin(Star):
             yield event.plain_result("还没有轮到你方解密！")
 
         if session.phase == 0: # 回合转换，发送密码和笔记
-            
-            if not session.game_set(): #游戏还没结束
+            session.game_set()
+            dictionary = session.generate_note_dictionary()
+            tmpl_path = Path(__file__).parent / "template/note.html"
+            options = {
+                "type": "jpeg",
+                "quality": 90
+            }
+            with open(str(tmpl_path), "r", encoding="utf-8") as f:
+                tmpl_str = f.read()
+            url = await self.html_render(tmpl_str, dictionary, options=options)
+            yield event.image_result(url)
+            if not session.is_game_set: #游戏还没结束
                 reply = session.turn_change()
                 yield event.plain_result(reply)
                 await self.context.send_message(f"default:FriendMessage:{session.encrypter}", MessageChain().message(f"你的密码是：{session.password}"))
-                dictionary = session.generate_note_dictionary()
-                tmpl_path = Path(__file__).parent / "template/note.html"
-                with open(str(tmpl_path), "r", encoding="utf-8") as f:
-                    tmpl_str = f.read()
-                url = await self.html_render(tmpl_str, dictionary)
-                yield event.image_result(url)
             else: 
                 yield event.plain_result(session.game_set_reply)
                 del self.sessions[session_id]
@@ -430,10 +442,14 @@ class DecryptoPlugin(Star):
             return
         session: DecryptoSession = self.sessions[session_id]
         dictionary = session.generate_note_dictionary()
+        options = {
+            "type": "jpeg",
+            "quality": 90
+        }
         tmpl_path = Path(__file__).parent / "template/note.html"
         with open(str(tmpl_path), "r", encoding="utf-8") as f:
             tmpl_str = f.read()
-        url = await self.html_render(tmpl_str, dictionary)
+        url = await self.html_render(tmpl_str, dictionary, options=options)
         yield event.image_result(url)
 
     @decrypto.command("终止", alias=["stop"])

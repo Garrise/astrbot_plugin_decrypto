@@ -98,7 +98,7 @@
             </tr>
             <tr>
                 <td colspan="4">
-                    {% for player in black_teams%}
+                    {% for player in black_teams %}
                     {{ player[1] }} 
                     {% endfor %}
                 </td>
@@ -112,6 +112,13 @@
             </tr>
             <!-- 数据行 -->
             <tbody class="grid-data">
+                {% if is_game_set %}
+                    <tr>
+                        {% for keyword in black_keywords %}
+                            <td class="red-text">{{ keyword }}</td>
+                        {% endfor %}
+                    </tr>
+                {% endif %}
                 {% for cipher in black_history_ciphers %}
                     <tr>
                         <td>{{cipher[0]}}</td>
@@ -160,6 +167,13 @@
             </tr>
             <!-- 数据行 -->
             <tbody class="grid-data">
+                {% if is_game_set %}
+                    <tr>
+                        {% for keyword in white_keywords %}
+                            <td class="red-text">{{ keyword }}</td>
+                        {% endfor %}
+                    </tr>
+                {% endif %}
                 {% for cipher in white_history_ciphers %}
                     <tr>
                         <td>{{cipher[0]}}</td>
