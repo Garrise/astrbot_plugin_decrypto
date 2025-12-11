@@ -1,11 +1,12 @@
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult, MessageChain
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
-from astrbot.api.all import AstrBotConfig, Image, Plain
+from astrbot.api.all import AstrBotConfig, Image, Plain, At
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_platform_adapter import AiocqhttpMessageEvent
 
-import random, math
+import random, math, asyncio
 from pathlib import Path
+from collections import defaultdict
 
 class DecryptoSession():
     def __init__(self):            
@@ -39,7 +40,10 @@ class DecryptoSession():
 
         # 状态标识
         self.start_flag = False
+        self.keywords_sent = False
         self.is_game_set = False
+        self.black_confirmed = False
+        self.white_confirmed = False
         self.game_set_reply = ""
 
     def shuffle_teams(self):
@@ -47,15 +51,15 @@ class DecryptoSession():
         random.shuffle(self.white_teams)
 
     def game_start(self):
-        self.start_flag = True
         self.shuffle_teams()
-        start_reply = "截码战正式开始！"
+        start_reply = "队伍结成！开始分配关键字！"
         start_reply += "\n\n【黑队】"
         for index, member in enumerate(self.black_teams, start = 1):
             start_reply += f"\n{index}. {member[1]}"
         start_reply += "\n\n【白队】"
         for index, member in enumerate(self.white_teams, start = 1):
             start_reply += f"\n{index}. {member[1]}"
+        start_reply += "\n\n请各队成员确认关键字！"
         return start_reply
 
 
@@ -65,15 +69,17 @@ class DecryptoSession():
         player_seq = turn - 1
         black_index = player_seq % len(self.black_teams)
         white_index = player_seq % len(self.white_teams)
-        reply = f"第{turn}回合，"
+        reply = []
+        reply.append(Plain(f"第{turn}回合，"))
         
         if self.turn % 2 == 1:
             self.encrypter = self.black_teams[black_index][0]
-            reply += f"黑方加密员：{self.black_teams[black_index][1]}"
+            reply.append(Plain("黑方加密员："))
+            reply.append(At(qq=self.encrypter))
         else:
             self.encrypter = self.white_teams[white_index][0]
-            reply += f"白方加密员：{self.white_teams[white_index][1]}"
-        reply += "\n输入指令进行加密：\n/截码 加密 [密文1] [密文2] [密文3]\n/dc encrypt [cipher1] [cipher2] [cipher3]"
+            reply.append(Plain("白方加密员："))
+            reply.append(At(qq=self.encrypter))
         self.phase = 0
 
         # 私聊密码
@@ -85,6 +91,7 @@ class DecryptoSession():
     def encrypt(self, cipher1: str, cipher2: str, cipher3: str):
         ciphers = [cipher1, cipher2, cipher3]
         cipher_record = [""] * 4
+        reply = []
         for i, cipher in zip(self.password, ciphers):
             cipher_record[int(i) - 1] = cipher
         if self.turn % 2 == 1:
@@ -99,12 +106,20 @@ class DecryptoSession():
                 decrypt_side = "白"
             else: 
                 decrypt_side = "黑"
-            return f"加密完成！首回合无拦截阶段\n请{decrypt_side}队输入指令进行破解：\n/截码 解密 [密码]\n/dc decrypt [password]"
+            reply.append(Plain(f"加密完成！首回合无拦截阶段\n请{decrypt_side}队进行破解！"))
         else:
             self.phase = 1
-            return f"加密完成！\n请{decrypt_side}队输入指令进行破解：\n/截码 解密 [密码]\n/dc decrypt [password]"
+            reply.append(Plain(f"加密完成！\n请{decrypt_side}队进行破解！"))
+        if decrypt_side == "黑":
+            for player in self.black_teams:
+                reply.append(At(qq=player[0]))
+        else:
+            for player in self.white_teams:
+                reply.append(At(qq=player[0]))
+        return reply 
 
-    def decrypt(self, password: str) -> str | None:
+    def decrypt(self, password: str):
+        reply = []
         if self.phase == 1: # 敌方解密阶段
             self.enemy_password = password
             self.phase = 2
@@ -112,33 +127,34 @@ class DecryptoSession():
                 decrypt_side = "黑"
             else:
                 decrypt_side = "白"
-            return f"请{decrypt_side}队输入指令进行破解：\n/截码 解密 [密码]\n/dc decrypt [password]"
+            reply.append(Plain(f"请{decrypt_side}队进行破解！"))
+            for player in (self.black_teams if decrypt_side == "黑" else self.white_teams):
+                reply.append(At(qq=player[0]))
         elif self.phase == 2: # 我方解密阶段
             self.phase = 0
             self.ally_password = password
             reply = self.turn_close()
-            return reply
-        else:
-            return None
+        return reply
 
     def turn_close(self):
-        reply = f"回合结束！本回合密码为：{self.password}"
+        reply = []
+        reply.append(Plain(f"回合结束！本回合密码为：{self.password}"))
         if self.turn % 2 == 1: # 黑方加密
             self.black_history_ciphers.append(self.black_cipher)
             if self.enemy_password == self.password: # 白方猜测正确，拦截指示物+1
                 self.white_intercepts += 1
-                reply += f"\n\n白方破解成功！"
+                reply.append(Plain("\n\n白方破解成功！"))
             if self.ally_password != self.password: # 黑方猜测错误，错译指示物+1
                 self.black_errors += 1
-                reply += f"\n\n黑方译码失败！"
+                reply.append(Plain("\n\n黑方译码失败！"))
         else: # 白方加密
             self.white_history_ciphers.append(self.white_cipher)
             if self.enemy_password == self.password: # 黑方猜测正确，拦截指示物+1
                 self.black_intercepts += 1
-                reply += f"\n\n黑方破解成功！"
+                reply.append(Plain("\n\n黑方破解成功！"))
             if self.ally_password != self.password: # 黑方猜测错误，错译指示物+1
                 self.white_errors += 1
-                reply += f"\n\n白方译码失败！"
+                reply.append(Plain("\n\n白方译码失败！"))
         return reply
     
     def generate_note_dictionary(self):
@@ -207,9 +223,27 @@ class DecryptoSession():
             self.history_keywords = []
         elements = random.sample(available_keywords, 8)
         random.shuffle(elements)
-        self.history_keywords.append(elements)
+        self.history_keywords += elements
         self.black_keywords = elements[0:4]
         self.white_keywords = elements[4:8]
+    
+    def _generate_new_keywords(self, team: str):
+        available_keywords = list(set(self.keywords) - set(self.history_keywords))
+        if len(available_keywords) < 4:
+            self.history_keywords = []
+            if team == "黑" or team == "black":
+                self.history_keywords += self.white_keywords
+            else:
+                self.history_keywords += self.black_keywords
+            available_keywords = list(set(self.keywords) - set(self.history_keywords))
+        elements = random.sample(available_keywords, 4)
+        random.shuffle(elements)
+        self.history_keywords += elements
+        if team == "黑" or team == "black":
+            self.black_keywords = elements
+        else:
+            self.white_keywords = elements
+        
 
 @register("截码战Decrypto", "Garrise", "截码战桌游插件", "1.0.0")
 class DecryptoPlugin(Star):
@@ -219,6 +253,7 @@ class DecryptoPlugin(Star):
     async def initialize(self):
         """可选择实现异步的插件初始化方法，当实例化该插件类之后会自动调用该方法。"""
         self.sessions = {}
+        self.group_locks = defaultdict(asyncio.Lock)
 
     # 注册指令的装饰器。指令名为 helloworld。注册成功后，发送 `/helloworld` 就会触发这个指令，并回复 `你好, {user_name}!`
     @filter.command("截码战", alias={"decrypto"})
@@ -226,19 +261,20 @@ class DecryptoPlugin(Star):
         session_id = event.get_group_id()
         if session_id == "":
             return
-        if session_id in self.sessions:
-            yield event.plain_result(f"截码战游戏正在运行中")
-            event.stop_event()
-            return
-        session = DecryptoSession()
-        self.sessions[session_id] = session
-        yield event.plain_result('''
+        async with self.group_locks[session_id]:
+            if session_id in self.sessions:
+                yield event.plain_result(f"截码战游戏正在运行中")
+                event.stop_event()
+                return
+            session = DecryptoSession()
+            self.sessions[session_id] = session
+            yield event.plain_result('''
 截码战开始招募特工！
 【请保证已经添加机器人为好友】
 参加指令：
 /截码 加入 [黑/白/随机]
 /dc join [black/white/random]
-        '''.strip())
+            '''.strip())
 
     @filter.command_group("截码", alias={"dc"})
     def decrypto():
@@ -249,64 +285,65 @@ class DecryptoPlugin(Star):
         session_id = event.get_group_id()
         if session_id == "":
             return
-        if session_id not in self.sessions:
-            session = DecryptoSession()
-            self.sessions[session_id] = session
-            yield event.plain_result('''
+        async with self.group_locks[session_id]:
+            if session_id not in self.sessions:
+                session = DecryptoSession()
+                self.sessions[session_id] = session
+                yield event.plain_result('''
 截码战开始招募特工！
 参加指令：
 /截码 加入 [黑/白/随机]
 /dc join [black/white/random]
-        '''.strip())
-        black_cmd = ["黑", "black"]
-        white_cmd = ["白", "white"]
-        random_cmd = ["随机", "random"]
-        session: DecryptoSession = self.sessions[session_id]
-        if session.start_flag:
-            yield event.plain_result("游戏已经开始，无法加入！")
-            event.stop_event
-            return
-        if event.get_sender_id() in session.black_teams or event.get_sender_id() in session.white_teams:
-            yield event.plain_result(f"你已经加入了一个队伍！")
-            event.stop_event()
-            return
-        if team in black_cmd:
-            if len(session.black_teams) < 4:
-                session.black_teams.append((event.get_sender_id(), event.get_sender_name()))
-                yield event.plain_result(f"{event.get_sender_name()}加入了黑队！")
-            else:
-                yield event.plain_result(f"黑队人数已满，无法加入！")
-        elif team in white_cmd:
-            if len(session.white_teams) < 4:
-                session.white_teams.append((event.get_sender_id(), event.get_sender_name()))
-                yield event.plain_result(f"{event.get_sender_name()}加入了白队！")
-            else:
-                yield event.plain_result(f"白队人数已满，无法加入！")
-        elif team in random_cmd:
-            if len(session.black_teams) < 4 and len(session.white_teams) < 4:
-                if len(session.black_teams) < len(session.white_teams):
+            '''.strip())
+            black_cmd = ["黑", "black"]
+            white_cmd = ["白", "white"]
+            random_cmd = ["随机", "random"]
+            session: DecryptoSession = self.sessions[session_id]
+            if session.start_flag:
+                yield event.plain_result("游戏已经开始，无法加入！")
+                event.stop_event
+                return
+            if event.get_sender_id() in session.black_teams or event.get_sender_id() in session.white_teams:
+                yield event.plain_result(f"你已经加入了一个队伍！")
+                event.stop_event()
+                return
+            if team in black_cmd:
+                if len(session.black_teams) < 4:
                     session.black_teams.append((event.get_sender_id(), event.get_sender_name()))
                     yield event.plain_result(f"{event.get_sender_name()}加入了黑队！")
-                elif len(session.white_teams) < len(session.black_teams):
+                else:
+                    yield event.plain_result(f"黑队人数已满，无法加入！")
+            elif team in white_cmd:
+                if len(session.white_teams) < 4:
                     session.white_teams.append((event.get_sender_id(), event.get_sender_name()))
                     yield event.plain_result(f"{event.get_sender_name()}加入了白队！")
                 else:
-                    coin = random.randint(0, 1)
-                    if coin:
+                    yield event.plain_result(f"白队人数已满，无法加入！")
+            elif team in random_cmd:
+                if len(session.black_teams) < 4 and len(session.white_teams) < 4:
+                    if len(session.black_teams) < len(session.white_teams):
                         session.black_teams.append((event.get_sender_id(), event.get_sender_name()))
                         yield event.plain_result(f"{event.get_sender_name()}加入了黑队！")
-                    else:
+                    elif len(session.white_teams) < len(session.black_teams):
                         session.white_teams.append((event.get_sender_id(), event.get_sender_name()))
                         yield event.plain_result(f"{event.get_sender_name()}加入了白队！")
-            elif len(session.black_teams) < 4:
-                session.black_teams.append((event.get_sender_id(), event.get_sender_name()))
-                yield event.plain_result(f"{event.get_sender_name()}加入了黑队！")
-            elif len(session.white_teams) < 4:
-                session.white_teams.append((event.get_sender_id(), event.get_sender_name()))
-                yield event.plain_result(f"{event.get_sender_name()}加入了白队！")
-            else:
-                yield event.plain_result(f"队伍人数已满，无法加入！")
-        event.stop_event()
+                    else:
+                        coin = random.randint(0, 1)
+                        if coin:
+                            session.black_teams.append((event.get_sender_id(), event.get_sender_name()))
+                            yield event.plain_result(f"{event.get_sender_name()}加入了黑队！")
+                        else:
+                            session.white_teams.append((event.get_sender_id(), event.get_sender_name()))
+                            yield event.plain_result(f"{event.get_sender_name()}加入了白队！")
+                elif len(session.black_teams) < 4:
+                    session.black_teams.append((event.get_sender_id(), event.get_sender_name()))
+                    yield event.plain_result(f"{event.get_sender_name()}加入了黑队！")
+                elif len(session.white_teams) < 4:
+                    session.white_teams.append((event.get_sender_id(), event.get_sender_name()))
+                    yield event.plain_result(f"{event.get_sender_name()}加入了白队！")
+                else:
+                    yield event.plain_result(f"队伍人数已满，无法加入！")
+            event.stop_event()
     
     @decrypto.command("开始", alias={"start"})
     async def start(self, event: AiocqhttpMessageEvent):
@@ -317,44 +354,101 @@ class DecryptoPlugin(Star):
             yield event.plain_result(f"截码战尚未开始！")
             event.stop_event()
             return
-        session: DecryptoSession = self.sessions[session_id]
-        if session.start_flag:
-            event.stop_event()
-            return
-        if len(session.black_teams) < 2 or len(session.white_teams) < 2:
-            yield event.plain_result("每队至少需要2名成员才能开始游戏！")
-            event.stop_event()
-            return
-        #判断玩家是否都是好友
-        reply = "以下玩家不是机器人的好友，无法开始游戏："
-        not_friends = []
-        for member_id, member_name in session.black_teams + session.white_teams:
-            is_friend = False
-            friend_list = await event.bot.call_action("get_friend_list")
-            for friend in friend_list:
-                if member_id == str(friend.get("user_id")):
-                    is_friend = True
-                    break
-            if not is_friend:
-                not_friends.append(member_name)
-        if not_friends:
-            yield event.plain_result(reply + "\n" + "\n".join(f"- {name}" for name in not_friends))
-            event.stop_event()
-            return
-                
-        reply = session.game_start()
-        yield event.plain_result(reply)
+        async with self.group_locks[session_id]:
+            session: DecryptoSession = self.sessions[session_id]
+            if session.start_flag or session.keywords_sent:
+                event.stop_event()
+                return
+            if len(session.black_teams) < 2 or len(session.white_teams) < 2:
+                yield event.plain_result("每队至少需要2名成员才能开始游戏！")
+                event.stop_event()
+                return
+            #判断玩家是否都是好友
+            reply = "以下玩家不是机器人的好友，无法开始游戏："
+            not_friends = []
+            for member_id, member_name in session.black_teams + session.white_teams:
+                is_friend = False
+                friend_list = await event.bot.call_action("get_friend_list")
+                for friend in friend_list:
+                    if member_id == str(friend.get("user_id")):
+                        is_friend = True
+                        break
+                if not is_friend:
+                    not_friends.append(member_name)
+            if not_friends:
+                yield event.plain_result(reply + "\n" + "\n".join(f"- {name}" for name in not_friends))
+                event.stop_event()
+                return
+                    
+            reply = session.game_start()
+            yield event.plain_result(reply)
 
-        #分发关键字
-        for member_id, _  in session.black_teams:
-            await self.context.send_message(f"default:FriendMessage:{member_id}", MessageChain().message(f"关键字：{', '.join(session.black_keywords)}"))
-        for member_id, _  in session.white_teams:
-            await self.context.send_message(f"default:FriendMessage:{member_id}", MessageChain().message(f"关键字：{', '.join(session.white_keywords)}"))
-        
-        # 宣告第一回合，并发送密码
-        reply = session.turn_change()
-        yield event.plain_result(reply)
-        await self.context.send_message(f"default:FriendMessage:{session.encrypter}", MessageChain().message(f"你的密码是：{session.password}"))
+            #分发关键字
+            for member_id, _  in session.black_teams:
+                print(f"发送黑队关键字给{member_id}")
+                await self.context.send_message(f"default:FriendMessage:{member_id}", MessageChain().message(f"关键字：{', '.join(session.black_keywords)}"))
+            for member_id, _  in session.white_teams:
+                print(f"发送白队关键字给{member_id}")
+                await self.context.send_message(f"default:FriendMessage:{member_id}", MessageChain().message(f"关键字：{', '.join(session.white_keywords)}"))
+            session.keywords_sent = True
+
+    @decrypto.command("关键字", alias={"keywords"})
+    async def keywords(self, event: AstrMessageEvent, confirmed: str):
+        session_id = event.get_group_id()
+        if session_id == "":
+            return
+        if session_id not in self.sessions:
+            yield event.plain_result("截码战尚未开始！")
+            event.stop_event()
+            return
+        async with self.group_locks[session_id]:
+            session: DecryptoSession = self.sessions[session_id]
+            if session.start_flag:
+                yield event.plain_result("游戏已经开始！无法处理关键字！")
+                event.stop_event()
+                return
+            if not session.keywords_sent:
+                yield event.plain_result("关键字尚未发送！")
+                event.stop_event()
+                return
+            if confirmed.lower() == "确认" or confirmed.lower() == "confirm":
+                sender_id = event.get_sender_id()
+                if any(member[0] == sender_id for member in session.black_teams):
+                    session.black_confirmed = True
+                    yield event.plain_result("黑队关键字确认完成！")
+                elif any(member[0] == sender_id for member in session.white_teams):
+                    session.white_confirmed = True
+                    yield event.plain_result("白队关键字确认完成！")
+                else:
+                    yield event.plain_result("你不在任何队伍中！")
+                if session.black_confirmed and session.white_confirmed:
+                    session.start_flag = True
+                    yield event.plain_result("双方关键字均已确认，游戏正式开始！")
+                    # 宣告第一回合，并发送密码
+                    reply = session.turn_change()
+                    yield event.chain_result(reply)
+                    await self.context.send_message(f"default:FriendMessage:{session.encrypter}", MessageChain().message(f"你的密码是：{session.password}"))
+            elif confirmed.lower() == "重抽" or confirmed.lower() == "reroll":
+                sender_id = event.get_sender_id()
+                if any(member[0] == sender_id for member in session.black_teams):
+                    if session.black_confirmed:
+                        yield event.plain_result("黑队关键字已确认，无法重抽！")
+                        return
+                    session._generate_new_keywords("黑")
+                    for member in session.black_teams:
+                        await self.context.send_message(f"default:FriendMessage:{member[0]}", MessageChain().message(f"新的关键字：{', '.join(session.black_keywords)}"))
+                    yield event.plain_result("黑队关键字已重抽并发送，请查收私信！")
+                elif any(member[0] == sender_id for member in session.white_teams):
+                    if session.white_confirmed:
+                        yield event.plain_result("白队关键字已确认，无法重抽！")
+                        return
+                    session._generate_new_keywords("白")
+                    for member in session.white_teams:
+                        await self.context.send_message(f"default:FriendMessage:{member[0]}", MessageChain().message(f"新的关键字：{', '.join(session.white_keywords)}"))
+                    yield event.plain_result("白队关键字已重抽并发送，请查收私信！")
+                else:
+                    yield event.plain_result("你不在任何队伍中！")
+            
 
     @decrypto.command("加密", alias={"encrypt"})
     async def encrypt(self, event: AstrMessageEvent, cipher1: str, cipher2: str, cipher3: str):
@@ -365,23 +459,24 @@ class DecryptoPlugin(Star):
             yield event.plain_result("截码战尚未开始！")
             event.stop_event()
             return
-        session: DecryptoSession = self.sessions[session_id]
-        if not session.start_flag:
-            yield event.plain_result("截码战尚未开始！")
-            event.stop_event()
-            return
-        if session.phase != 0:
-            yield event.plain_result("现在不是加密阶段！")
-            event.stop_event()
-            return            
-        sender_id = event.get_sender_id()
-        if sender_id != session.encrypter:
-            yield event.plain_result("你不是加密员！")
-            event.stop_event
-            return
-        
-        reply = session.encrypt(cipher1, cipher2, cipher3)
-        yield event.plain_result(reply)
+        async with self.group_locks[session_id]:
+            session: DecryptoSession = self.sessions[session_id]
+            if not session.start_flag:
+                yield event.plain_result("截码战尚未开始！")
+                event.stop_event()
+                return
+            if session.phase != 0:
+                yield event.plain_result("现在不是加密阶段！")
+                event.stop_event()
+                return            
+            sender_id = event.get_sender_id()
+            if sender_id != session.encrypter:
+                yield event.plain_result("你不是加密员！")
+                event.stop_event
+                return
+            
+            reply = session.encrypt(cipher1, cipher2, cipher3)
+            yield event.chain_result(reply)
 
     @decrypto.command("解密", alias=["decrypt"])
     async def decrypt(self, event: AstrMessageEvent, password: str):
@@ -392,44 +487,46 @@ class DecryptoPlugin(Star):
             yield event.plain_result("截码战尚未开始！")
             event.stop_event()
             return
-        session: DecryptoSession = self.sessions[session_id]
-        if not session.start_flag:
-            yield event.plain_result("截码战尚未开始！")
-            event.stop_event()
-            return         
-        sender_id = event.get_sender_id()
-        if sender_id == session.encrypter:
-            yield event.plain_result("加密员请保持沉默！")
-            event.stop_event()
-            return
-        if ((session.turn + session.phase) % 2 == 0 and any(member[0] == sender_id for member in session.white_teams)) or \
-            ((session.turn + session.phase) % 2 == 1 and any(member[0] == sender_id for member in session.black_teams)):
-            reply: str | None = session.decrypt(password)
-            if reply is not None:
-                yield event.plain_result(reply)
-        else:
-            yield event.plain_result("还没有轮到你方解密！")
+        async with self.group_locks[session_id]:
+            session: DecryptoSession = self.sessions[session_id]
+            if not session.start_flag:
+                yield event.plain_result("截码战尚未开始！")
+                event.stop_event()
+                return         
+            sender_id = event.get_sender_id()
+            if sender_id == session.encrypter:
+                yield event.plain_result("加密员请保持沉默！")
+                event.stop_event()
+                return
+            if ((session.turn + session.phase) % 2 == 0 and any(member[0] == sender_id for member in session.white_teams)) or \
+                ((session.turn + session.phase) % 2 == 1 and any(member[0] == sender_id for member in session.black_teams)):
+                reply = session.decrypt(password)
+                if reply:
+                    yield event.chain_result(reply)
+            else:
+                yield event.plain_result("还没有轮到你方解密！")
 
-        if session.phase == 0: # 回合转换，发送密码和笔记
-            session.game_set()
-            dictionary = session.generate_note_dictionary()
-            tmpl_path = Path(__file__).parent / "template/note.html"
-            options = {
-                "type": "jpeg",
-                "quality": 90
-            }
-            with open(str(tmpl_path), "r", encoding="utf-8") as f:
-                tmpl_str = f.read()
-            url = await self.html_render(tmpl_str, dictionary, options=options)
-            yield event.image_result(url)
-            if not session.is_game_set: #游戏还没结束
-                reply = session.turn_change()
-                yield event.plain_result(reply)
-                await self.context.send_message(f"default:FriendMessage:{session.encrypter}", MessageChain().message(f"你的密码是：{session.password}"))
-            else: 
-                yield event.plain_result(session.game_set_reply)
-                del self.sessions[session_id]
-        event.stop_event()
+            if session.phase == 0: # 回合转换，发送密码和笔记
+                session.game_set()
+                dictionary = session.generate_note_dictionary()
+                tmpl_path = Path(__file__).parent / "template/note.html"
+                options = {
+                    "type": "jpeg",
+                    "quality": 90
+                }
+                with open(str(tmpl_path), "r", encoding="utf-8") as f:
+                    tmpl_str = f.read()
+                url = await self.html_render(tmpl_str, dictionary, options=options)
+                yield event.image_result(url)
+                if not session.is_game_set: #游戏还没结束
+                    reply = session.turn_change()
+                    yield event.chain_result(reply)
+                    await self.context.send_message(f"default:FriendMessage:{session.encrypter}", MessageChain().message(f"你的密码是：{session.password}"))
+                else: 
+                    yield event.plain_result(session.game_set_reply)
+                    del self.sessions[session_id]
+                    del self.group_locks[session_id]    
+            event.stop_event()
 
     @decrypto.command("查询", alias=["info"])
     async def info(self, event: AstrMessageEvent):
@@ -440,17 +537,18 @@ class DecryptoPlugin(Star):
             yield event.plain_result("截码战尚未开始！")
             event.stop_event()
             return
-        session: DecryptoSession = self.sessions[session_id]
-        dictionary = session.generate_note_dictionary()
-        options = {
-            "type": "jpeg",
-            "quality": 90
-        }
-        tmpl_path = Path(__file__).parent / "template/note.html"
-        with open(str(tmpl_path), "r", encoding="utf-8") as f:
-            tmpl_str = f.read()
-        url = await self.html_render(tmpl_str, dictionary, options=options)
-        yield event.image_result(url)
+        async with self.group_locks[session_id]:
+            session: DecryptoSession = self.sessions[session_id]
+            dictionary = session.generate_note_dictionary()
+            options = {
+                "type": "jpeg",
+                "quality": 90
+            }
+            tmpl_path = Path(__file__).parent / "template/note.html"
+            with open(str(tmpl_path), "r", encoding="utf-8") as f:
+                tmpl_str = f.read()
+            url = await self.html_render(tmpl_str, dictionary, options=options)
+            yield event.image_result(url)
 
     @decrypto.command("终止", alias=["stop"])
     async def stop(self, event: AstrMessageEvent):
@@ -461,10 +559,34 @@ class DecryptoPlugin(Star):
             yield event.plain_result("截码战尚未开始！")
             event.stop_event()
             return
-        session: DecryptoSession = self.sessions[session_id]
-        del self.sessions[session_id]
-        yield event.plain_result("截码战已终止。")
-        event.stop_event()
+        async with self.group_locks[session_id]:
+            del self.sessions[session_id]
+            del self.group_locks[session_id]
+            yield event.plain_result("截码战已终止。")
+            event.stop_event()
+
+    @decrypto.command("帮助", alias=["help"])
+    async def help(self, event: AstrMessageEvent):
+        help_text = '''
+截码战Decrypto插件帮助：
+"/截码 加入 [黑/白/随机]" 或 "/dc join [black/white/random]"
+  加入黑队或白队，或随机加入。
+
+"/截码 开始" 或 "/dc start"
+  开始截码战游戏，分配关键字。
+
+"/截码 关键字 [重抽/确认]" 或 "/dc keywords [reroll/confirm]"
+  关键字确认或重抽指令，只有在游戏开始前可以使用。
+
+"/截码 加密 [密文1] [密文2] [密文3]" 或 "/dc encrypt [cipher1] [cipher2] [cipher3]"
+  加密指令，只有加密员可以使用。
+
+"/截码 解密 [密码]" 或 "/dc decrypt [password]"
+  解密指令，非加密员可以使用。
+
+"/截码 查询" 或 "/dc info"
+  查询当前游戏状态和笔记。'''
+        yield event.plain_result(help_text)
 
     async def terminate(self):
         """可选择实现异步的插件销毁方法，当插件被卸载/停用时会调用。"""
