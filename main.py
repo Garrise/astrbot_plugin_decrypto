@@ -4,12 +4,12 @@ from astrbot.api import logger
 from astrbot.api.all import AstrBotConfig, Image, Plain, At
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_platform_adapter import AiocqhttpMessageEvent
 
-import random, math, asyncio
+import random, math, asyncio, time
 from pathlib import Path
 from collections import defaultdict
 
 class DecryptoSession():
-    def __init__(self):            
+    def __init__(self, decrypt_timeout: int = 300, encrypt_timeout: int = 1800):            
         with open(Path(__file__).parent / "keywords.txt", "r", encoding="utf-8") as f:
             self.keywords = f.read().split(",")
         self.history_keywords = []
@@ -100,7 +100,7 @@ class DecryptoSession():
         else:
             self.white_cipher = cipher_record
             decrypt_side = "黑"
-        if self.turn / 2 < 1: # 第一回合不提示密码
+        if self.turn / 2 <= 1: # 第一回合不提示密码
             self.phase = 2
             if decrypt_side == "黑":
                 decrypt_side = "白"
@@ -243,17 +243,149 @@ class DecryptoSession():
             self.black_keywords = elements
         else:
             self.white_keywords = elements
-        
 
-@register("截码战Decrypto", "Garrise", "截码战桌游插件", "1.0.0")
+@register("截码战Decrypto", "Garrise", "截码战桌游插件", "1.1.0")
 class DecryptoPlugin(Star):
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
+        self.config = config
 
     async def initialize(self):
         """可选择实现异步的插件初始化方法，当实例化该插件类之后会自动调用该方法。"""
         self.sessions = {}
         self.group_locks = defaultdict(asyncio.Lock)
+        self.decrypt_timeout = self.config.get("decrypt_timeout", 300)  # 默认解密阶段超时300秒/5分钟
+        self.encrypt_timeout = self.config.get("encrypt_timeout", 1800)  # 默认加密阶段总超时1800秒/30分钟
+        self.timeout_tasks = {}
+        self.remaining_time = {}
+        self.black_timeout = self.encrypt_timeout
+        self.white_timeout = self.encrypt_timeout
+        self.encrypt_start_time: int = 0
+
+    async def _start_timeout_task(self, session_id: str):
+        #检查先前的超时任务，如果有，取消它
+        if session_id in self.timeout_tasks:
+            task = self.timeout_tasks[session_id]
+            if not task.done():
+                task.cancel()
+        #获取当前游戏进程
+        if session_id in self.sessions:
+            session: DecryptoSession = self.sessions[session_id]
+        async def time_reminder(remaining):
+            while remaining > 0:
+
+                await asyncio.sleep(1)
+                remaining -= 1
+
+                if remaining % 300 == 0:
+                    minutes_left = remaining // 60
+                    if minutes_left > 0:
+                        await self.context.send_message(f"default:GroupMessage:{session_id}", MessageChain().message(f"剩余{minutes_left}分钟！"))
+                if remaining == 120:
+                    await self.context.send_message(f"default:GroupMessage:{session_id}", MessageChain().message("剩余2分钟！"))
+        async def timeout_handler():
+            #加密阶段
+            if session.phase == 0:
+                if session.turn % 2 == 0: #白方加密
+                    # 剩余时间提醒
+                    await self.context.send_message(f"default:GroupMessage:{session_id}", MessageChain().message(f"剩余时间：{self.white_timeout // 60}分钟！"))
+                    remaining = self.white_timeout
+
+                    await time_reminder(remaining)
+                    
+                    session.is_game_set = True
+                    session.game_set_reply = "截码战游戏加密阶段超时，白方未能在规定时间内完成加密，黑方获得胜利！"
+                    dictionary = session.generate_note_dictionary()
+                    tmpl_path = Path(__file__).parent / "template/note.html"
+                    options = {
+                        "type": "jpeg",
+                        "quality": 90
+                    }
+                    with open(str(tmpl_path), "r", encoding="utf-8") as f:
+                        tmpl_str = f.read()
+                    url = await self.html_render(tmpl_str, dictionary, options=options)
+                    await self.context.send_message(f"default:GroupMessage:{session_id}", MessageChain().message(session.game_set_reply))
+                    await self.context.send_message(f"default:GroupMessage:{session_id}", MessageChain().url_image(url))
+                    del self.timeout_tasks[session_id]
+                    del self.sessions[session_id]
+                else: #黑方加密
+                    # 剩余时间提醒
+                    await self.context.send_message(f"default:GroupMessage:{session_id}", MessageChain().message(f"剩余时间：{self.black_timeout // 60}分钟！"))
+                    remaining = self.black_timeout
+                    
+                    await time_reminder(remaining)
+
+                    session.is_game_set = True
+                    session.game_set_reply = "截码战游戏加密阶段超时，黑方未能在规定时间内完成加密，白方获得胜利！"
+                    dictionary = session.generate_note_dictionary()
+                    tmpl_path = Path(__file__).parent / "template/note.html"
+                    options = {
+                        "type": "jpeg",
+                        "quality": 90
+                    }
+                    with open(str(tmpl_path), "r", encoding="utf-8") as f:
+                        tmpl_str = f.read()
+                    url = await self.html_render(tmpl_str, dictionary, options=options)
+                    await self.context.send_message(f"default:GroupMessage:{session_id}", MessageChain().message(session.game_set_reply))
+                    await self.context.send_message(f"default:GroupMessage:{session_id}", MessageChain().url_image(url))
+                    del self.timeout_tasks[session_id]
+                    del self.sessions[session_id]
+            elif session.phase == 1: #敌方截码阶段
+                await self.context.send_message(f"default:GroupMessage:{session_id}", MessageChain().message(f"剩余时间：{self.decrypt_timeout // 60}分钟！"))
+                remaining = self.decrypt_timeout
+
+                await time_reminder(remaining)
+
+                session.enemy_password = "000" #默认猜测错误
+                session.phase = 2
+                if session.turn % 2 == 0: #白方加密，黑方截码
+                    message_chain = MessageChain().message("黑方解密超时，轮到白方进行译码！")
+                    for player in session.white_teams:
+                        message_chain.at(player[1], player[0])
+                else: #黑方加密，白方截码
+                    message_chain = MessageChain().message("白方解密超时，轮到黑方进行译码！")
+                    for player in session.black_teams:
+                        message_chain.at(player[1], player[0])
+                await self.context.send_message(f"default:GroupMessage:{session_id}", message_chain)
+            elif session.phase == 2: #我方译码阶段
+                await self.context.send_message(f"default:GroupMessage:{session_id}", MessageChain().message(f"剩余时间：{self.decrypt_timeout // 60}分钟！"))
+                remaining = self.decrypt_timeout
+
+                await time_reminder(remaining)
+                
+                session.phase = 0
+                session.ally_password = "000" #默认猜测错误
+                if session.turn % 2 == 0: #白方加密，白方译码
+                    message_chain = MessageChain().message("白方解密超时，回合结束！")
+                else: #黑方加密，黑方译码
+                    message_chain = MessageChain().message("黑方解密超时，回合结束！")
+                await self.context.send_message(f"default:GroupMessage:{session_id}", message_chain)
+                # 回合结算
+                reply = session.turn_close()
+                await self.context.send_message(f"default:GroupMessage:{session_id}", MessageChain(reply))
+                # 胜负判断
+                session.game_set()
+                if session.is_game_set:
+                    dictionary = session.generate_note_dictionary()
+                    tmpl_path = Path(__file__).parent / "template/note.html"
+                    options = {
+                        "type": "jpeg",
+                        "quality": 90
+                    }
+                    with open(str(tmpl_path), "r", encoding="utf-8") as f:
+                        tmpl_str = f.read()
+                    url = await self.html_render(tmpl_str, dictionary, options=options)
+                    await self.context.send_message(f"default:GroupMessage:{session_id}", MessageChain().message(session.game_set_reply))
+                    await self.context.send_message(f"default:GroupMessage:{session_id}", MessageChain().url_image(url))
+                    del self.timeout_tasks[session_id]
+                    del self.sessions[session_id]
+                else:
+                    reply = session.turn_change()
+                    await self.context.send_message(f"default:GroupMessage:{session_id}", MessageChain(reply))
+                    await self.context.send_message(f"default:FriendMessage:{session.encrypter}", MessageChain().message(f"你的密码是：{session.password}")) 
+        task = asyncio.create_task(timeout_handler())
+        self.timeout_tasks[session_id] = task
+        logger.info(f"Started timeout task for session {session_id}")
 
     # 注册指令的装饰器。指令名为 helloworld。注册成功后，发送 `/helloworld` 就会触发这个指令，并回复 `你好, {user_name}!`
     @filter.command("截码战", alias={"decrypto"})
@@ -266,7 +398,7 @@ class DecryptoPlugin(Star):
                 yield event.plain_result(f"截码战游戏正在运行中")
                 event.stop_event()
                 return
-            session = DecryptoSession()
+            session = DecryptoSession(self.decrypt_timeout, self.encrypt_timeout)
             self.sessions[session_id] = session
             yield event.plain_result('''
 截码战开始招募特工！
@@ -287,7 +419,7 @@ class DecryptoPlugin(Star):
             return
         async with self.group_locks[session_id]:
             if session_id not in self.sessions:
-                session = DecryptoSession()
+                session = DecryptoSession(self.decrypt_timeout, self.encrypt_timeout)
                 self.sessions[session_id] = session
                 yield event.plain_result('''
 截码战开始招募特工！
@@ -428,6 +560,9 @@ class DecryptoPlugin(Star):
                     reply = session.turn_change()
                     yield event.chain_result(reply)
                     await self.context.send_message(f"default:FriendMessage:{session.encrypter}", MessageChain().message(f"你的密码是：{session.password}"))
+                    # 开始计时
+                    self.encrypt_start_time = int(time.perf_counter())
+                    await self._start_timeout_task(session_id)
             elif confirmed.lower() == "重抽" or confirmed.lower() == "reroll":
                 sender_id = event.get_sender_id()
                 if any(member[0] == sender_id for member in session.black_teams):
@@ -472,11 +607,21 @@ class DecryptoPlugin(Star):
             sender_id = event.get_sender_id()
             if sender_id != session.encrypter:
                 yield event.plain_result("你不是加密员！")
-                event.stop_event
+                event.stop_event()
                 return
             
             reply = session.encrypt(cipher1, cipher2, cipher3)
             yield event.chain_result(reply)
+            # 停止计时
+            encrypt_end_time = int(time.perf_counter())
+            elapsed_time = encrypt_end_time - self.encrypt_start_time
+            if session.turn % 2 == 0: #白方加密
+                self.white_timeout = self.white_timeout - elapsed_time
+            else: #黑方加密
+                self.black_timeout = self.black_timeout - elapsed_time
+            # 开始解密阶段超时任务
+            await self._start_timeout_task(session_id)
+
 
     @decrypto.command("解密", alias=["decrypt"])
     async def decrypt(self, event: AstrMessageEvent, password: str):
@@ -522,10 +667,19 @@ class DecryptoPlugin(Star):
                     reply = session.turn_change()
                     yield event.chain_result(reply)
                     await self.context.send_message(f"default:FriendMessage:{session.encrypter}", MessageChain().message(f"你的密码是：{session.password}"))
+                    # 开始计时
+                    self.encrypt_start_time = int(time.perf_counter())
+                    await self._start_timeout_task(session_id)
                 else: 
                     yield event.plain_result(session.game_set_reply)
                     del self.sessions[session_id]
-                    del self.group_locks[session_id]    
+                    del self.group_locks[session_id]
+                    task = self.timeout_tasks[session]
+                    if not task.done():
+                        task.cancel()
+                    del self.timeout_tasks[session_id]
+            else: # 回合没转换
+                await self._start_timeout_task(session_id)
             event.stop_event()
 
     @decrypto.command("查询", alias=["info"])

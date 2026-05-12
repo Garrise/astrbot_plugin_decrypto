@@ -1,0 +1,14 @@
+{
+  "decrypt_timeout": {
+    "description": "解密阶段超时设置（秒）",
+    "type": "int",
+    "default": 300,
+    "hint": "超时后未完成解密的队伍将自动失败（如果是加密队伍超时，则记录一次译码失败）"
+  },
+  "encrypt_timeout": {
+    "description": "加密阶段总超时设置（秒）",
+    "type": "int",
+    "default": 1800,
+    "hint": "每个队伍加密阶段共用的总时间，超时后未完成加密的队伍将自动失败"
+  }
+}
