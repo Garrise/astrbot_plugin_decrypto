@@ -40,6 +40,7 @@ class DecryptoSession():
 
         # 状态标识
         self.start_flag = False
+        self.custom_keywords = False
         self.keywords_sent = False
         self.is_game_set = False
         self.black_confirmed = False
@@ -478,7 +479,7 @@ class DecryptoPlugin(Star):
             event.stop_event()
     
     @decrypto.command("开始", alias={"start"})
-    async def start(self, event: AiocqhttpMessageEvent):
+    async def start(self, event: AiocqhttpMessageEvent, mode: str = "random"):
         session_id = event.get_group_id()
         if session_id == "":
             return
@@ -515,14 +516,82 @@ class DecryptoPlugin(Star):
             reply = session.game_start()
             yield event.plain_result(reply)
 
-            #分发关键字
-            for member_id, _  in session.black_teams:
-                print(f"发送黑队关键字给{member_id}")
-                await self.context.send_message(f"default:FriendMessage:{member_id}", MessageChain().message(f"关键字：{', '.join(session.black_keywords)}"))
-            for member_id, _  in session.white_teams:
-                print(f"发送白队关键字给{member_id}")
-                await self.context.send_message(f"default:FriendMessage:{member_id}", MessageChain().message(f"关键字：{', '.join(session.white_keywords)}"))
-            session.keywords_sent = True
+            if mode.lower() == "custom" or mode.lower() == "自定义":
+                #等待法官私聊关键字
+                session.custom_keywords = True
+                yield event.plain_result("请法官私聊机器人发送关键字")
+                return
+            else:
+                #分发关键字
+                for member_id, _  in session.black_teams:
+                    print(f"发送黑队关键字给{member_id}")
+                    await self.context.send_message(f"default:FriendMessage:{member_id}", MessageChain().message(f"关键字：{', '.join(session.black_keywords)}"))
+                for member_id, _  in session.white_teams:
+                    print(f"发送白队关键字给{member_id}")
+                    await self.context.send_message(f"default:FriendMessage:{member_id}", MessageChain().message(f"关键字：{', '.join(session.white_keywords)}"))
+                session.keywords_sent = True
+
+    @decrypto.command("自定义", alias={"custom"})
+    async def custom_keywords(self, event: AstrMessageEvent, group_id: str, keywords: str):
+        session_id = group_id
+        if session_id not in self.sessions:
+            yield event.plain_result("截码战尚未开始！")
+            event.stop_event()
+            return
+        async with self.group_locks[session_id]:
+            session: DecryptoSession = self.sessions[session_id]
+            if not session.start_flag:
+                yield event.plain_result("游戏尚未开始！")
+                event.stop_event()
+                return
+            if not session.custom_keywords:
+                yield event.plain_result("本局游戏不使用自定义关键字！")
+                event.stop_event()
+                return
+            sender_id = event.get_sender_id()
+            is_judge = True
+            for member in session.black_teams + session.white_teams:
+                if sender_id == member[0]:
+                    is_judge = False
+                    break
+            if not is_judge:
+                yield event.plain_result("玩家不能设置关键字！")
+                event.stop_event()
+                return
+            if session.black_keywords or session.white_keywords:
+                yield event.plain_result("关键字已经设置！")
+                event.stop_event()
+                return
+            else:
+                if "|" not in keywords:
+                    yield event.plain_result("关键字格式错误！\n格式：\n 黑队关键词(用半角逗号隔开)|白队关键词(用半角逗号隔开)")
+                    event.stop_event()
+                    return
+                if "," not in keywords.split("|")[0] or "," not in keywords.split("|")[1]:
+                    yield event.plain_result("关键字格式错误！\n格式：\n 黑队关键词(用半角逗号隔开)|白队关键词(用半角逗号隔开)")
+                    event.stop_event()
+                    return
+                black_keywords = keywords.split("|")[0].split(",")
+                white_keywords = keywords.split("|")[1].split(",")
+                if len(black_keywords) != 4 or len(white_keywords) != 4:
+                    yield event.plain_result("关键字数量错误，请确保每队有4个关键字！")
+                    event.stop_event()
+                    return
+                for keyword in black_keywords + white_keywords:
+                    if " " in keyword:
+                        yield event.plain_result("关键字不能包含空格！")
+                        event.stop_event()
+                        return
+                session.black_keywords = black_keywords
+                session.white_keywords = white_keywords
+                #分发关键字
+                for member_id, _  in session.black_teams:
+                    print(f"发送黑队关键字给{member_id}")
+                    await self.context.send_message(f"default:FriendMessage:{member_id}", MessageChain().message(f"关键字：{', '.join(session.black_keywords)}"))
+                for member_id, _  in session.white_teams:
+                    print(f"发送白队关键字给{member_id}")
+                    await self.context.send_message(f"default:FriendMessage:{member_id}", MessageChain().message(f"关键字：{', '.join(session.white_keywords)}"))
+                yield event.plain_result("关键字已设置！")
 
     @decrypto.command("关键字", alias={"keywords"})
     async def keywords(self, event: AstrMessageEvent, confirmed: str):
@@ -537,6 +606,10 @@ class DecryptoPlugin(Star):
             session: DecryptoSession = self.sessions[session_id]
             if session.start_flag:
                 yield event.plain_result("游戏已经开始！无法处理关键字！")
+                event.stop_event()
+                return
+            if session.custom_keywords:
+                yield event.plain_result("本局游戏使用自定义关键字，无法自动处理关键字！")
                 event.stop_event()
                 return
             if not session.keywords_sent:
