@@ -832,7 +832,10 @@ class DecryptoPlugin(Star):
   解密指令，非加密员可以使用。
 
 "/截码 查询" 或 "/dc info"
-  查询当前游戏状态和笔记。'''
+  查询当前游戏状态和笔记。
+
+"/截码 终止" 或 "/dc stop"
+  终止当前游戏。'''
         yield event.plain_result(help_text)
 
     async def terminate(self):
