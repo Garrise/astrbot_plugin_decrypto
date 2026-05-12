@@ -834,7 +834,7 @@ class DecryptoPlugin(Star):
 "/截码 查询" 或 "/dc info"
   查询当前游戏状态和笔记。
 
-"/截码 终止" 或 "/dc stop"
+"/截码 终止" 或 "/dc terminate"
   终止当前游戏。'''
         yield event.plain_result(help_text)
 
