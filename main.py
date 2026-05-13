@@ -140,28 +140,28 @@ class DecryptoSession():
         elif self.phase == 2: # 我方解密阶段
             self.phase = 0
             self.ally_password = password
-            reply = self.turn_close()
+            reply.append(Plain(self.turn_close()))
         return reply
 
     def turn_close(self):
-        reply = []
-        reply.append(Plain(f"回合结束！本回合密码为：{self.password}"))
+        reply = ""
+        reply += f"回合结束！本回合密码为：{self.password}"
         if self.turn % 2 == 1: # 黑方加密
             self.black_history_ciphers.append(self.black_cipher)
             if self.enemy_password == self.password: # 白方猜测正确，拦截指示物+1
                 self.white_intercepts += 1
-                reply.append(Plain("\n\n白方破解成功！"))
+                reply += "\n\n白方破解成功！"
             if self.ally_password != self.password: # 黑方猜测错误，错译指示物+1
                 self.black_errors += 1
-                reply.append(Plain("\n\n黑方译码失败！"))
+                reply += "\n\n黑方译码失败！"
         else: # 白方加密
             self.white_history_ciphers.append(self.white_cipher)
             if self.enemy_password == self.password: # 黑方猜测正确，拦截指示物+1
                 self.black_intercepts += 1
-                reply.append(Plain("\n\n黑方破解成功！"))
+                reply += "\n\n黑方破解成功！"
             if self.ally_password != self.password: # 黑方猜测错误，错译指示物+1
                 self.white_errors += 1
-                reply.append(Plain("\n\n白方译码失败！"))
+                reply += "\n\n白方译码失败！"
         return reply
     
     def generate_note_dictionary(self):
@@ -301,6 +301,7 @@ class DecryptoPlugin(Star):
                     
                     session.is_game_set = True
                     session.game_set_reply = "截码战游戏加密阶段超时，白方未能在规定时间内完成加密，黑方获得胜利！"
+                    await self.context.send_message(f"default:GroupMessage:{session_id}", MessageChain().message(session.game_set_reply))
                     dictionary = session.generate_note_dictionary()
                     tmpl_path = Path(__file__).parent / "template/note.html"
                     options = {
@@ -310,7 +311,6 @@ class DecryptoPlugin(Star):
                     with open(str(tmpl_path), "r", encoding="utf-8") as f:
                         tmpl_str = f.read()
                     url = await self.html_render(tmpl_str, dictionary, options=options)
-                    await self.context.send_message(f"default:GroupMessage:{session_id}", MessageChain().message(session.game_set_reply))
                     await self.context.send_message(f"default:GroupMessage:{session_id}", MessageChain().url_image(url))
                     del self.timeout_tasks[session_id]
                     del self.sessions[session_id]
@@ -323,6 +323,7 @@ class DecryptoPlugin(Star):
 
                     session.is_game_set = True
                     session.game_set_reply = "截码战游戏加密阶段超时，黑方未能在规定时间内完成加密，白方获得胜利！"
+                    await self.context.send_message(f"default:GroupMessage:{session_id}", MessageChain().message(session.game_set_reply))
                     dictionary = session.generate_note_dictionary()
                     tmpl_path = Path(__file__).parent / "template/note.html"
                     options = {
@@ -332,7 +333,6 @@ class DecryptoPlugin(Star):
                     with open(str(tmpl_path), "r", encoding="utf-8") as f:
                         tmpl_str = f.read()
                     url = await self.html_render(tmpl_str, dictionary, options=options)
-                    await self.context.send_message(f"default:GroupMessage:{session_id}", MessageChain().message(session.game_set_reply))
                     await self.context.send_message(f"default:GroupMessage:{session_id}", MessageChain().url_image(url))
                     del self.timeout_tasks[session_id]
                     del self.sessions[session_id]
@@ -369,23 +369,29 @@ class DecryptoPlugin(Star):
                 await self.context.send_message(f"default:GroupMessage:{session_id}", message_chain)
                 # 回合结算
                 reply = session.turn_close()
-                await self.context.send_message(f"default:GroupMessage:{session_id}", MessageChain(reply))
+                await self.context.send_message(f"default:GroupMessage:{session_id}", MessageChain().message(reply))
+                # 回合转换，发送密码和笔记
+                dictionary = session.generate_note_dictionary()
+                tmpl_path = Path(__file__).parent / "template/note.html"
+                options = {
+                    "type": "jpeg",
+                    "quality": 90
+                }
+                with open(str(tmpl_path), "r", encoding="utf-8") as f:
+                    tmpl_str = f.read()
+                url = await self.html_render(tmpl_str, dictionary, options=options)
+                await self.context.send_message(f"default:GroupMessage:{session_id}", MessageChain().url_image(url))
                 # 胜负判断
                 session.game_set()
                 if session.is_game_set:
-                    dictionary = session.generate_note_dictionary()
-                    tmpl_path = Path(__file__).parent / "template/note.html"
-                    options = {
-                        "type": "jpeg",
-                        "quality": 90
-                    }
-                    with open(str(tmpl_path), "r", encoding="utf-8") as f:
-                        tmpl_str = f.read()
-                    url = await self.html_render(tmpl_str, dictionary, options=options)
                     await self.context.send_message(f"default:GroupMessage:{session_id}", MessageChain().message(session.game_set_reply))
                     await self.context.send_message(f"default:GroupMessage:{session_id}", MessageChain().url_image(url))
-                    del self.timeout_tasks[session_id]
                     del self.sessions[session_id]
+                    del self.group_locks[session_id]
+                    task = self.timeout_tasks[session_id]
+                    if not task.done():
+                        task.cancel()
+                    del self.timeout_tasks[session_id]
                 else:
                     reply = session.turn_change()
                     await self.context.send_message(f"default:GroupMessage:{session_id}", MessageChain(reply))
@@ -526,7 +532,7 @@ class DecryptoPlugin(Star):
             if mode.lower() == "custom" or mode.lower() == "自定义":
                 #等待法官私聊关键字
                 session.custom_keywords = True
-                yield event.plain_result("请法官私聊机器人发送关键字。\n格式：\n/截码 自定义 [群号] 黑队关键词1,黑队关键词2,黑队关键词3,黑队关键词4|白队关键词1,白队关键词2,白队关键词3,白队关键词4")
+                yield event.plain_result("请法官私聊机器人发送关键字。\n格式：\n/截码 自定义 [群号] 黑1,黑2,黑3,黑4|白1,白2,白3,白4")
                 return
             else:
                 #分发关键字
@@ -537,6 +543,7 @@ class DecryptoPlugin(Star):
                     print(f"发送白队关键字给{member_id}")
                     await self.context.send_message(f"default:FriendMessage:{member_id}", MessageChain().message(f"关键字：{', '.join(session.white_keywords)}"))
                 session.keywords_sent = True
+                yield event.plain_result("关键字分发完毕，请双方确认关键字。\n格式：\n/截码 关键字 确认/重抽")
 
     @decrypto.command("自定义", alias={"custom"})
     async def custom_keywords(self, event: AstrMessageEvent, group_id: str, keywords: str):
@@ -571,11 +578,11 @@ class DecryptoPlugin(Star):
                 return
             else:
                 if "|" not in keywords:
-                    yield event.plain_result("关键字格式错误！\n格式：\n黑队关键词1,黑队关键词2,黑队关键词3,黑队关键词4|白队关键词1,白队关键词2,白队关键词3,白队关键词4")
+                    yield event.plain_result("关键字格式错误！\n格式：\n黑1,黑2,黑3,黑4|白1,白2,白3,白4")
                     event.stop_event()
                     return
                 if "," not in keywords.split("|")[0] or "," not in keywords.split("|")[1]:
-                    yield event.plain_result("关键字格式错误！\n格式：\n黑队关键词1,黑队关键词2,黑队关键词3,黑队关键词4|白队关键词1,白队关键词2,白队关键词3,白队关键词4")
+                    yield event.plain_result("关键字格式错误！\n格式：\n黑1,黑2,黑3,黑4|白1,白2,白3,白4")
                     event.stop_event()
                     return
                 black_keywords = keywords.split("|")[0].split(",")
@@ -600,6 +607,7 @@ class DecryptoPlugin(Star):
                     await self.context.send_message(f"default:FriendMessage:{member_id}", MessageChain().message(f"关键字：{', '.join(session.white_keywords)}"))
                 session.custom_keywords_set = True
                 session.keywords_sent = True
+                await self.context.send_message(f"default:GroupMessage:{session_id}", MessageChain().message("关键字分发完毕，请双方确认关键字。\n格式：\n/截码 关键字 确认/重抽"))
                 yield event.plain_result("关键字已设置！")
 
     @decrypto.command("关键字", alias={"keywords"})
@@ -740,11 +748,13 @@ class DecryptoPlugin(Star):
                     yield event.chain_result(reply)
             else:
                 yield event.plain_result("还没有轮到你方解密！")
+                event.stop_event()
+                return
 
             if session.phase == 0: # 回合转换，发送密码和笔记
                 session.game_set()
                 dictionary = session.generate_note_dictionary()
-                tmpl_path = Path(__file__).parent / "template/note.html"
+                tmpl_path = Path(__file__).parent / "template/note.html" 
                 options = {
                     "type": "jpeg",
                     "quality": 90
@@ -806,6 +816,10 @@ class DecryptoPlugin(Star):
         async with self.group_locks[session_id]:
             del self.sessions[session_id]
             del self.group_locks[session_id]
+            if session_id in self.timeout_tasks:
+                task = self.timeout_tasks[session_id]
+                if not task.done():
+                    task.cancel()
             yield event.plain_result("截码战已终止。")
             event.stop_event()
 
